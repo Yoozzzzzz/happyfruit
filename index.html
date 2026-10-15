@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>开心消消乐</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 关卡选择首页 -->
+    <div id="level-select">
+        <h1 class="ls-title">🍭 开心消消乐</h1>
+        <p class="ls-sub">选择关卡开始游戏</p>
+        <div id="level-grid"></div>
+        <p class="ls-legend">🧱 隔断块：不可交换，特殊糖果可摧毁 &nbsp;|&nbsp; ❄️ 冻结块：在它旁边消除即可破冰</p>
+        <p class="ls-legend">🎯 多种过关目标：分数达标 / 破冰块数 / 收集指定水果 &nbsp;|&nbsp; 🏜️ 随机形状地图</p>
+    </div>
+
+    <div id="game-container">
+        <!-- 顶部信息栏 -->
+        <header id="hud">
+            <button id="level-back-btn" title="返回选关">◀ 选关</button>
+            <div class="hud-item">
+                <span class="hud-label">关卡</span>
+                <span id="level-display">1</span>
+            </div>
+            <div class="hud-item">
+                <span class="hud-label">分数</span>
+                <span id="score-display">0</span>
+            </div>
+            <div class="hud-item">
+                <span class="hud-label">目标</span>
+                <span id="target-display">1000</span>
+            </div>
+            <div class="hud-item">
+                <span class="hud-label">剩余步数</span>
+                <span id="moves-display">20</span>
+            </div>
+        </header>
+
+        <!-- 进度条 -->
+        <div id="progress-bar-outer">
+            <div id="progress-bar-inner"></div>
+        </div>
+
+        <!-- 关卡目标进度 -->
+        <div id="goals-bar"></div>
+
+        <!-- 连击提示 -->
+        <div id="combo-banner"></div>
+
+        <!-- 游戏棋盘 -->
+        <div id="board"></div>
+
+        <!-- 底部道具栏 -->
+        <div id="tools-bar">
+            <button class="tool-btn" id="tool-hammer" title="锤子：敲碎任意一个糖果">
+                <span class="tool-icon">🔨</span>
+                <span class="tool-name">锤子</span>
+                <span class="tool-count" id="hammer-count">x3</span>
+            </button>
+            <button class="tool-btn" id="tool-bomb" title="炸弹：炸掉 3x3 范围">
+                <span class="tool-icon">💣</span>
+                <span class="tool-name">炸弹</span>
+                <span class="tool-count" id="bomb-count">x1</span>
+            </button>
+            <button class="tool-btn" id="tool-shuffle" title="刷新：打乱全部糖果">
+                <span class="tool-icon">🔄</span>
+                <span class="tool-name">刷新</span>
+                <span class="tool-count" id="shuffle-count">x1</span>
+            </button>
+            <button class="tool-btn" id="sound-btn" title="音效开关" style="margin-left:auto">🔊</button>
+            <button class="tool-btn" id="tool-swap" title="换位：任意交换两个糖果">
+                <span class="tool-icon">🔀</span>
+                <span class="tool-name">换位</span>
+                <span class="tool-count" id="swap-count">x2</span>
+            </button>
+        </div>
+
+        <!-- 提示文字 -->
+        <p id="hint">点击或拖动交换相邻糖果，3个以上相同糖果即可消除</p>
+
+        <!-- 结算弹窗 -->
+        <div id="modal" class="hidden">
+            <div id="modal-content">
+                <h2 id="modal-title">恭喜过关！</h2>
+                <p id="modal-text"></p>
+                <button id="modal-btn">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
