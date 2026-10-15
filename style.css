@@ -601,6 +601,19 @@ body {
     pointer-events: none;
 }
 
+/* ===== 食材：醒目金边 + 呼吸光效，提示玩家护送到底部 ===== */
+.candy[data-ingredient] {
+    background: linear-gradient(135deg, #fef9c3, #fde68a 50%, #fcd34d);
+    border: 3px solid #f59e0b;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.6), inset 0 -3px 6px rgba(0, 0, 0, 0.15);
+    animation: ingredientGlow 1.2s ease infinite alternate;
+    font-size: 30px;
+}
+@keyframes ingredientGlow {
+    from { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4), inset 0 -3px 6px rgba(0, 0, 0, 0.15); }
+    to   { box-shadow: 0 0 18px rgba(245, 158, 11, 0.8), inset 0 -3px 6px rgba(0, 0, 0, 0.15); }
+}
+
 /* 破冰动画 */
 .candy.ice-break {
     animation: iceBreak 0.35s ease forwards;
