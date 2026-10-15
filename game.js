@@ -13,12 +13,15 @@ let dropMs = DROP_MS;
 const BASE_POINTS = 60;
 
 /* ===== 关卡配置：每关不同的形状、目标、步数、障碍数量（位置随机生成） ===== */
-/* walls:     隔断块数量，不可交换/不可消除/阻挡掉落，可被特殊糖果摧毁 */
-/* ice:       冻结块数量，糖果被冰层包裹不可交换，在它上下左右消除即可破冰（糖果保留） */
-/* iceLayers: 冰层厚度（1~3 层），每次消除只破一层，全部破完才解冻；目标数 = 冰块数 × 层数 */
-/* shape:     棋盘形状模板名，空洞格子不渲染、不参与匹配与掉落 */
-/* goal:      通关目标 { type: 'score'|'ice'|'fruit', target } */
+/* walls:       隔断块数量，不可交换/不可消除/阻挡掉落，可被特殊糖果摧毁 */
+/* ice:         冻结块数量，糖果被冰层包裹不可交换，在它上下左右消除即可破冰（糖果保留） */
+/* iceLayers:   冰层厚度（1~3 层），每次消除只破一层，全部破完才解冻；目标数 = 冰块数 × 层数 */
+/* jelly:       果冻格数量，糖果下方垫有果冻，消除上方糖果时果冻减1层；目标数 = 果冻数 × 层数 */
+/* jellyLayers: 果冻厚度（1~2 层） */
+/* shape:       棋盘形状模板名，空洞格子不渲染、不参与匹配与掉落 */
+/* goal:        通关目标 { type: 'score'|'ice'|'fruit'|'jelly', target } */
 /*   score: target 为目标分数；ice: target 为需破冰层数总和；fruit: target 为 { 颜色索引: 数量 } */
+/*   jelly: target 为需清除的果冻总层数 */
 const LEVEL_CONFIGS = [
     { moves: 18, walls: 0, ice: 0,  iceLayers: 1, shape: "full",    goal: { type: "score", target: 1200 } },
     { moves: 14, walls: 0, ice: 8,  iceLayers: 1, shape: "full",    goal: { type: "ice", target: 8 } },
@@ -35,6 +38,9 @@ const LEVEL_CONFIGS = [
     { moves: 24, walls: 0, ice: 0,  iceLayers: 1, shape: "zigzag",  goal: { type: "fruit", target: { 0: 28, 3: 28 } } },
     { moves: 26, walls: 6, ice: 0,  iceLayers: 1, shape: "zigzag",  goal: { type: "score", target: 18000 } },
     { moves: 26, walls: 5, ice: 14, iceLayers: 3, shape: "cross",   goal: { type: "ice", target: 42 } },
+    { moves: 20, walls: 0, ice: 0, iceLayers: 1, jelly: 10, jellyLayers: 1, shape: "full",    goal: { type: "jelly", target: 10 } },
+    { moves: 22, walls: 2, ice: 0, iceLayers: 1, jelly: 12, jellyLayers: 1, shape: "corners", goal: { type: "jelly", target: 12 } },
+    { moves: 24, walls: 0, ice: 0, iceLayers: 1, jelly: 12, jellyLayers: 2, shape: "diamond", goal: { type: "jelly", target: 24 } },
 ];
 
 function getLevelConfig(lv) {
@@ -44,15 +50,19 @@ function getLevelConfig(lv) {
     const extra = lv - LEVEL_CONFIGS.length;
     const shapes = ["full", "corners", "cross", "diamond", "donut", "stairs", "zigzag"];
     const shape = shapes[extra % shapes.length];
-    const goalTypes = ["score", "ice", "fruit"];
+    const goalTypes = ["score", "ice", "fruit", "jelly"];
     const gt = goalTypes[extra % goalTypes.length];
-    let goal, ice = 0, iceLayers = 1;
+    let goal, ice = 0, iceLayers = 1, jelly = 0, jellyLayers = 1;
     if (gt === "score") {
         goal = { type: "score", target: Math.round(18000 * Math.pow(1.1, extra)) };
     } else if (gt === "ice") {
         iceLayers = Math.min(3, 1 + Math.floor(extra / 6));
         ice = Math.min(14, 10 + Math.floor(extra / 4));
         goal = { type: "ice", target: ice * iceLayers };
+    } else if (gt === "jelly") {
+        jellyLayers = Math.min(2, 1 + Math.floor(extra / 8));
+        jelly = Math.min(14, 10 + Math.floor(extra / 4));
+        goal = { type: "jelly", target: jelly * jellyLayers };
     } else {
         const c1 = extra % COLOR_COUNT, c2 = (c1 + 2) % COLOR_COUNT;
         const n = Math.min(32, 24 + Math.floor(extra / 2));
@@ -65,6 +75,8 @@ function getLevelConfig(lv) {
         walls: Math.min(12, base.walls + (extra % 3)),
         ice: gt === "ice" ? ice : Math.min(14, base.ice + ((extra + 1) % 4)),
         iceLayers: gt === "ice" ? iceLayers : 1,
+        jelly: gt === "jelly" ? jelly : 0,
+        jellyLayers: gt === "jelly" ? jellyLayers : 1,
         shape,
         goal,
     };
@@ -133,6 +145,7 @@ function genShape(shapeName) {
 function genObstacles(cfg) {
     const wallSet = new Set();
     const iceSet = new Set();
+    const jellySet = new Set();
     const colWallCount = new Array(COLS).fill(0);
     let attempts = 0;
     /* 隔断块：随机散布，每列最多2个避免堵死掉落通道 */
@@ -155,7 +168,17 @@ function genObstacles(cfg) {
         if (wallSet.has(k) || iceSet.has(k) || holeSet.has(k)) continue;
         iceSet.add(k);
     }
-    return { wallSet, iceSet };
+    /* 果冻格：随机散布，不与隔断块/冻结块/空洞重叠 */
+    attempts = 0;
+    while (jellySet.size < (cfg.jelly || 0) && attempts < 300) {
+        attempts++;
+        const r = Math.floor(Math.random() * ROWS);
+        const c = Math.floor(Math.random() * COLS);
+        const k = key(r, c);
+        if (wallSet.has(k) || iceSet.has(k) || jellySet.has(k) || holeSet.has(k)) continue;
+        jellySet.add(k);
+    }
+    return { wallSet, iceSet, jellySet };
 }
 
 /* ===== DOM 引用 ===== */
@@ -393,6 +416,8 @@ let holeSet = new Set();    // 随机形状地图的空洞格（不渲染/不匹
 let goal = null;            // 当前关卡目标 { type, target }
 let iceBroken = 0;          // 已破冰块数
 let fruitCleared = {};      // 已消除各颜色水果数 { colorIndex: count }
+let jellyGrid = [];         // 果冻层数二维数组 jellyGrid[r][c] = 0~2（0=无果冻）
+let jellyCleared = 0;       // 已清除果冻层数
 let winStars = 1;           // 过关星级（bonusRound 前计算）
 
 /* ===== 关卡进度（localStorage 持久化） ===== */
@@ -484,6 +509,10 @@ function render() {
                 cell.el = createCandyEl(cell, r, c);
                 frag.appendChild(cell.el);
             }
+            /* 果冻层视觉：jellyGrid 与糖果数据独立，每次渲染同步 data-jelly */
+            const jl = (jellyGrid[r] && jellyGrid[r][c]) || 0;
+            if (jl > 0) cell.el.dataset.jelly = jl;
+            else cell.el.removeAttribute("data-jelly");
         }
     }
     for (const el of pool) el.remove();
@@ -495,11 +524,14 @@ function render() {
 function initBoard() {
     const cfg = getLevelConfig(level);
     holeSet = genShape(cfg.shape || "full");
-    const { wallSet, iceSet } = genObstacles(cfg);
+    const { wallSet, iceSet, jellySet } = genObstacles(cfg);
     grid = [];
+    jellyGrid = [];
     for (let r = 0; r < ROWS; r++) {
         grid[r] = [];
+        jellyGrid[r] = [];
         for (let c = 0; c < COLS; c++) {
+            jellyGrid[r][c] = 0;
             if (holeSet.has(key(r, c))) {
                 grid[r][c] = null; // 空洞格：不存在任何糖果
                 continue;
@@ -522,6 +554,7 @@ function initBoard() {
             );
             const cell = makeCell(color);
             if (iceSet.has(key(r, c))) cell.frozen = cfg.iceLayers || 1;
+            if (jellySet.has(key(r, c))) jellyGrid[r][c] = cfg.jellyLayers || 1;
             grid[r][c] = cell;
         }
     }
@@ -750,6 +783,14 @@ function applyIceBreak(broken) {
     }
 }
 
+/* 破一层果冻：糖果被消除时其下方果冻减1层，减到0该格果冻清除 */
+function breakOneJelly(r, c) {
+    if (!jellyGrid[r] || !jellyGrid[r][c]) return;
+    jellyGrid[r][c]--;
+    jellyCleared++;
+    if (jellyGrid[r][c] <= 0) jellyGrid[r][c] = 0;
+}
+
 /* ===== 消除主循环：处理匹配 → 特殊糖果生成 → 连击 ===== */
 async function processMatches() {
     let combo = 0;
@@ -816,6 +857,7 @@ async function processMatches() {
                 breakOneIce(cell);
                 continue;
             }
+            breakOneJelly(r, c);
             if (cell.el) cell.el.remove();
             grid[r][c] = null;
         }
@@ -1014,6 +1056,7 @@ async function activateCombo(r1, c1, r2, c2) {
         const cell = grid[rr][cc];
         if (!cell) continue;
         if (frozenKeys.has(k)) { breakOneIce(cell); continue; }
+        breakOneJelly(rr, cc);
         if (cell.el) cell.el.remove();
         grid[rr][cc] = null;
     }
@@ -1062,6 +1105,7 @@ async function activateSpecial(r, c) {
             breakOneIce(cell);
             continue;
         }
+        breakOneJelly(rr, cc);
         if (cell.el) cell.el.remove();
         grid[rr][cc] = null;
     }
@@ -1145,6 +1189,7 @@ function goalProgress() {
     if (!goal) return Math.min(100, Math.round((score / Math.max(1, target)) * 100));
     if (goal.type === "score") return Math.min(100, Math.round((score / goal.target) * 100));
     if (goal.type === "ice") return Math.min(100, Math.round((iceBroken / goal.target) * 100));
+    if (goal.type === "jelly") return Math.min(100, Math.round((jellyCleared / goal.target) * 100));
     if (goal.type === "fruit") {
         let total = 0, done = 0;
         for (const c in goal.target) {
@@ -1161,6 +1206,7 @@ function goalAchieved() {
     if (!goal) return score >= target;
     if (goal.type === "score") return score >= goal.target;
     if (goal.type === "ice") return iceBroken >= goal.target;
+    if (goal.type === "jelly") return jellyCleared >= goal.target;
     if (goal.type === "fruit") {
         for (const c in goal.target) {
             if ((fruitCleared[c] || 0) < goal.target[c]) return false;
@@ -1180,6 +1226,8 @@ function updateGoalsBar() {
         html += '<span class="goal-item' + (score >= goal.target ? " done" : "") + '">🎯 ' + score + '/' + goal.target + '</span>';
     } else if (goal.type === "ice") {
         html += '<span class="goal-item' + (iceBroken >= goal.target ? " done" : "") + '">❄️ ' + iceBroken + '/' + goal.target + '</span>';
+    } else if (goal.type === "jelly") {
+        html += '<span class="goal-item' + (jellyCleared >= goal.target ? " done" : "") + '">🧃 ' + jellyCleared + '/' + goal.target + '</span>';
     } else if (goal.type === "fruit") {
         for (const c in goal.target) {
             const got = fruitCleared[c] || 0;
@@ -1195,6 +1243,7 @@ function goalHintText() {
     if (!goal) return "滑动、拖动或点击相邻糖果交换，三连即可消除！";
     if (goal.type === "score") return "达到目标分数即可过关！";
     if (goal.type === "ice") return "❄️ 在冰块旁边消除，破冰 " + goal.target + " 层即可过关！";
+    if (goal.type === "jelly") return "🧃 消除果冻上方的糖果，清除 " + goal.target + " 层果冻即可过关！";
     if (goal.type === "fruit") {
         const parts = Object.keys(goal.target).map((c) => CANDY_ICONS[c] + "x" + goal.target[c]);
         return "收集指定水果即可过关：" + parts.join("  ");
@@ -1222,6 +1271,8 @@ function updateHUD() {
     levelEl.textContent = level;
     if (goal && goal.type === "ice") {
         targetEl.textContent = "❄️" + iceBroken + "/" + goal.target;
+    } else if (goal && goal.type === "jelly") {
+        targetEl.textContent = "🧃" + jellyCleared + "/" + goal.target;
     } else if (goal && goal.type === "fruit") {
         let d = 0, t = 0;
         for (const c in goal.target) {
@@ -1418,6 +1469,8 @@ function startGame(nextLevel) {
     target = goal && goal.type === "score" ? goal.target : 0;
     iceBroken = 0;
     fruitCleared = {};
+    jellyCleared = 0;
+    jellyGrid = [];
     movesLeft = cfg.moves;
     if (nextLevel) {
         // 道具补给
@@ -1485,6 +1538,7 @@ async function useTool(r, c) {
                 onCleared(new Set([key(r, c)]), null, null);
                 cell.el.classList.add("clearing");
                 await sleep(clearMs);
+                breakOneJelly(r, c);
                 cell.el.remove();
                 grid[r][c] = null;
             }
@@ -1535,6 +1589,7 @@ async function useTool(r, c) {
                 breakOneIce(cell2);
                 continue;
             }
+            breakOneJelly(rr, cc);
             if (cell2.el) cell2.el.remove();
             grid[rr][cc] = null;
         }
