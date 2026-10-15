@@ -194,6 +194,13 @@ body {
     transition: transform 0.25s cubic-bezier(0.55, 0, 1, 0.45);
 }
 
+/* 滑动跟手：禁用过渡保证跟手流畅，提升层级避免被相邻糖果遮挡 */
+.candy.swiping {
+    transition: none;
+    z-index: 10;
+    pointer-events: none;
+}
+
 /* ===== 空洞格子（随机形状地图缺格占位） ===== */
 .hole {
     border-radius: 14px;

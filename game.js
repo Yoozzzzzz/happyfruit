@@ -384,6 +384,7 @@ let tools = { hammer: 3, bomb: 1, shuffle: 1, swap: 2 };
 let activeTool = null;      // 当前选中的道具
 let selectedKey = null;     // 点击选中的糖果（用于点选交换）
 let dragStart = null;       // 拖拽起点
+let swipeInfo = null;       // 滑动换位信息（跟手位移 + 阈值触发）
 let swapFirst = null;       // 换位道具第一个选择
 let modalMode = null;        // 'win' | 'lose'
 let lastActionTime = Date.now(); // 最近一次用户操作时间（用于无操作提示）
@@ -474,9 +475,10 @@ function render() {
                 /* 复用：仅更新坐标数据与临时状态类 */
                 el.dataset.r = r;
                 el.dataset.c = c;
-                el.classList.remove("clearing", "ice-break", "selected", "hint-swap");
+                el.classList.remove("clearing", "ice-break", "selected", "hint-swap", "swiping");
                 el.style.removeProperty("--hx");
                 el.style.removeProperty("--hy");
+                el.style.removeProperty("transform");
                 frag.appendChild(el);
             } else {
                 cell.el = createCandyEl(cell, r, c);
@@ -1082,14 +1084,14 @@ function updateGoalsBar() {
 
 /* 关卡开场提示文案 */
 function goalHintText() {
-    if (!goal) return "拖动或点击相邻糖果交换，三连即可消除！";
+    if (!goal) return "滑动、拖动或点击相邻糖果交换，三连即可消除！";
     if (goal.type === "score") return "达到目标分数即可过关！";
     if (goal.type === "ice") return "❄️ 在冰块旁边消除，破冰 " + goal.target + " 层即可过关！";
     if (goal.type === "fruit") {
         const parts = Object.keys(goal.target).map((c) => CANDY_ICONS[c] + "x" + goal.target[c]);
         return "收集指定水果即可过关：" + parts.join("  ");
     }
-    return "拖动或点击相邻糖果交换，三连即可消除！";
+    return "滑动、拖动或点击相邻糖果交换，三连即可消除！";
 }
 
 /* 星级评定：分数关按超额完成度，其他关按剩余步数（bonusRound 前调用） */
@@ -1349,7 +1351,7 @@ function setTool(name) {
     else if (activeTool === "bomb") hintEl.textContent = "💣 炸弹：点击中心格，炸掉 3x3";
     else if (activeTool === "shuffle") hintEl.textContent = "🔄 刷新：立即洗牌";
     else if (activeTool === "swap") hintEl.textContent = "🔀 换位：点击两个任意糖果交换";
-    else hintEl.textContent = "拖动或点击相邻糖果交换，三连即可消除！";
+    else hintEl.textContent = "滑动、拖动或点击相邻糖果交换，三连即可消除！";
 }
 
 /* ===== 使用道具 ===== */
@@ -1385,7 +1387,7 @@ async function useTool(r, c) {
         await processMatches();
         await checkBoardState();
         busy = false;
-        hintEl.textContent = "拖动或点击相邻糖果交换，三连即可消除！";
+        hintEl.textContent = "滑动、拖动或点击相邻糖果交换，三连即可消除！";
     } else if (tool === "bomb") {
         tools.bomb--;
         updateHUD();
@@ -1433,7 +1435,7 @@ async function useTool(r, c) {
         await processMatches();
         await checkBoardState();
         busy = false;
-        hintEl.textContent = "拖动或点击相邻糖果交换，三连即可消除！";
+        hintEl.textContent = "滑动、拖动或点击相邻糖果交换，三连即可消除！";
     } else if (tool === "swap") {
         const pickCell = grid[r][c];
         if (!pickCell || pickCell.wall || pickCell.frozen) {
@@ -1476,7 +1478,7 @@ async function useTool(r, c) {
             busy = false;
             await checkLevelEnd();
         }
-        hintEl.textContent = "拖动或点击相邻糖果交换，三连即可消除！";
+        hintEl.textContent = "滑动、拖动或点击相邻糖果交换，三连即可消除！";
     }
 }
 
@@ -1491,7 +1493,7 @@ async function useShuffleTool() {
     await processMatches();
     await checkBoardState();
     busy = false;
-    hintEl.textContent = "拖动或点击相邻糖果交换，三连即可消除！";
+    hintEl.textContent = "滑动、拖动或点击相邻糖果交换，三连即可消除！";
 }
 
 /* ===== 无操作提示：10秒无操作时模拟交换动画，用户操作立即停止 ===== */
@@ -1570,15 +1572,95 @@ function onBoardPointerDown(e) {
     dragStart = pos;
     selectedKey = key(pos.r, pos.c);
     updateSelection();
+    /* 记录滑动起点，用于跟手位移与阈值触发换位 */
+    swipeInfo = {
+        x: e.clientX, y: e.clientY,
+        r: pos.r, c: pos.c,
+        el: downCell.el,
+        cellSize: downCell.el ? downCell.el.offsetWidth : 56,
+        tracking: false,   // 是否已进入跟手模式
+        triggered: false,  // 滑动换位是否已触发
+    };
+    /* 捕获指针：手指滑出糖果/棋盘也能持续收到 move/up 事件 */
+    try { boardEl.setPointerCapture(e.pointerId); } catch (err) {}
+}
+
+/* ===== 滑动换位：跟手位移 + 超阈值自动触发交换 ===== */
+/* 取消滑动：恢复糖果位置与状态 */
+function cancelSwipe() {
+    if (swipeInfo && swipeInfo.el) {
+        swipeInfo.el.classList.remove("swiping");
+        swipeInfo.el.style.transform = "";
+    }
+    swipeInfo = null;
+}
+
+function onBoardPointerMove(e) {
+    if (!swipeInfo || swipeInfo.triggered) return;
+    if (busy || gameOver) { cancelSwipe(); return; }
+    const dx = e.clientX - swipeInfo.x;
+    const dy = e.clientY - swipeInfo.y;
+    const dist = Math.hypot(dx, dy);
+    const cellSize = swipeInfo.cellSize;
+    const triggerDist = cellSize * 0.35; // 滑动触发阈值：格子尺寸的 35%
+
+    /* 位移超过 6px 进入跟手模式：取消选中动画，禁用过渡保证跟手流畅 */
+    if (!swipeInfo.tracking && dist > 6) {
+        swipeInfo.tracking = true;
+        selectedKey = null;
+        updateSelection();
+        if (swipeInfo.el) swipeInfo.el.classList.add("swiping");
+    }
+
+    if (dist < triggerDist) {
+        /* 未达阈值：糖果跟手微移（限制在半格内，避免越界视觉） */
+        if (swipeInfo.tracking && swipeInfo.el) {
+            const limit = cellSize * 0.45;
+            const cx = Math.max(-limit, Math.min(limit, dx));
+            const cy = Math.max(-limit, Math.min(limit, dy));
+            swipeInfo.el.style.transform = "translate(" + cx + "px," + cy + "px)";
+        }
+        return;
+    }
+
+    /* 达到阈值：按主方向立即触发换位，无需等松手 */
+    swipeInfo.triggered = true;
+    if (swipeInfo.el) {
+        swipeInfo.el.classList.remove("swiping");
+        swipeInfo.el.style.transform = "";
+    }
+    let dr = 0, dc = 0;
+    if (Math.abs(dx) >= Math.abs(dy)) dc = dx > 0 ? 1 : -1;
+    else dr = dy > 0 ? 1 : -1;
+    const r2 = swipeInfo.r + dr, c2 = swipeInfo.c + dc;
+    const sr = swipeInfo.r, sc = swipeInfo.c;
+    swipeInfo = null;
+    dragStart = null;
+    /* 滑出棋盘边界：取消换位（糖果自动回弹） */
+    if (!inBoard(r2, c2)) return;
+    handleSwap(sr, sc, r2, c2);
 }
 
 function onBoardPointerUp(e) {
     markAction();
-    if (busy || gameOver || !dragStart) return;
-    const pos = getCandyFromEvent(e);
+    /* 恢复跟手位移，结束滑动状态 */
+    const info = swipeInfo;
+    if (info && info.el) {
+        info.el.classList.remove("swiping");
+        info.el.style.transform = "";
+    }
+    swipeInfo = null;
+    if (busy || gameOver) { dragStart = null; return; }
+    if (!dragStart) return;
+    /* 滑动换位已触发，不再走点选/拖动逻辑 */
+    if (info && info.triggered) { dragStart = null; return; }
     const start = dragStart;
     dragStart = null;
-    if (!pos) return;
+    /* setPointerCapture 后 e.target 为棋盘，改用坐标取松手位置的糖果 */
+    const elAtPoint = document.elementFromPoint(e.clientX, e.clientY);
+    const candyEl = elAtPoint && elAtPoint.closest ? elAtPoint.closest(".candy") : null;
+    if (!candyEl) return;
+    const pos = { r: Number(candyEl.dataset.r), c: Number(candyEl.dataset.c) };
     const cell = grid[start.r][start.c];
     // 单击特殊糖果（未拖动）主动触发
     if (pos.r === start.r && pos.c === start.c && cell && cell.special) {
@@ -1616,7 +1698,9 @@ toolBtns.swap.addEventListener("click", () => setTool("swap"));
 
 /* ===== 棋盘事件绑定 ===== */
 boardEl.addEventListener("pointerdown", onBoardPointerDown);
+boardEl.addEventListener("pointermove", onBoardPointerMove);
 boardEl.addEventListener("pointerup", onBoardPointerUp);
+boardEl.addEventListener("pointercancel", cancelSwipe);
 
 /* ===== 关卡选择首页 ===== */
 function buildLevelGrid() {
