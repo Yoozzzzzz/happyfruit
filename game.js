@@ -902,6 +902,11 @@ async function handleSwap(r1, c1, r2, c2) {
     busy = true;
     doSwapRender(r1, c1, r2, c2);
     await sleep(dropMs);
+    /* 组合技：双方均为特殊糖果时直接触发，无需凑成三连 */
+    if (a.special && b.special) {
+        await activateCombo(r1, c1, r2, c2);
+        return;
+    }
     const groups = findMatchGroups();
     if (groups.length === 0) {
         // 无效交换：回退
@@ -912,6 +917,109 @@ async function handleSwap(r1, c1, r2, c2) {
         return;
     }
     movesLeft--;
+    await processMatches();
+    await checkBoardState();
+    busy = false;
+    await checkLevelEnd();
+}
+
+/* ===== 特殊糖果组合技：两个特殊糖果交换产生增强效果 ===== */
+/* 交换后原 a 位于 (r2,c2)，原 b 位于 (r1,c1) */
+async function activateCombo(r1, c1, r2, c2) {
+    const a = grid[r2][c2], b = grid[r1][c1];
+    const sa = a.special, sb = b.special;
+    const isR = s => s === "rainbow";
+    const isS = s => s === "striped-h" || s === "striped-v";
+    const isB = s => s === "bomb";
+
+    movesLeft--;
+    soundExplosion();
+    hintEl.textContent = "✨ 组合技触发！";
+
+    const clearSet = new Set();
+    const triggered = new Set();
+    /* 中心点取交换后 b 的位置 */
+    const midR = r1, midC = c1;
+
+    if (isR(sa) && isR(sb)) {
+        /* 彩虹+彩虹：全屏清除 */
+        for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++)
+                if (grid[r][c] && !grid[r][c].wall) addWithSpecial(clearSet, r, c, triggered);
+    } else if (isR(sa) || isR(sb)) {
+        /* 彩虹+条纹/炸弹：全场同色普通糖果变为对应特殊糖果并全部触发 */
+        const otherCell = isR(sa) ? b : a;
+        const targetColor = otherCell.color;
+        const newSpecial = isS(otherCell.special) ? otherCell.special : "bomb";
+        const converted = [];
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                const cell = grid[r][c];
+                if (cell && !cell.wall && !cell.frozen && !cell.special && cell.color === targetColor) {
+                    cell.special = newSpecial;
+                    converted.push([r, c]);
+                }
+            }
+        }
+        render();
+        soundSpecial();
+        await sleep(200);
+        for (const [r, c] of converted) {
+            if (grid[r][c] && grid[r][c].special) addWithSpecial(clearSet, r, c, triggered);
+        }
+        /* 两个原始特殊糖果一并消除 */
+        clearSet.add(key(r1, c1));
+        clearSet.add(key(r2, c2));
+    } else if (isS(sa) && isS(sb)) {
+        /* 条纹+条纹：十字清除（整行+整列） */
+        for (let c = 0; c < COLS; c++) addWithSpecial(clearSet, midR, c, triggered);
+        for (let r = 0; r < ROWS; r++) addWithSpecial(clearSet, r, midC, triggered);
+    } else if ((isS(sa) && isB(sb)) || (isB(sa) && isS(sb))) {
+        /* 条纹+炸弹：三行三列清除 */
+        for (let dr = -1; dr <= 1; dr++)
+            for (let c = 0; c < COLS; c++)
+                if (inBoard(midR + dr, c)) addWithSpecial(clearSet, midR + dr, c, triggered);
+        for (let dc = -1; dc <= 1; dc++)
+            for (let r = 0; r < ROWS; r++)
+                if (inBoard(r, midC + dc)) addWithSpecial(clearSet, r, midC + dc, triggered);
+    } else if (isB(sa) && isB(sb)) {
+        /* 炸弹+炸弹：5×5 范围爆炸 */
+        for (let dr = -2; dr <= 2; dr++)
+            for (let dc = -2; dc <= 2; dc++)
+                if (inBoard(midR + dr, midC + dc)) addWithSpecial(clearSet, midR + dr, midC + dc, triggered);
+    }
+
+    /* 计分（组合技 1.5 倍加成） */
+    const points = Math.round(clearSet.size * BASE_POINTS * 1.5);
+    score += points;
+    updateHUD();
+    showFlyScore(points, clearSet);
+
+    /* 消除动画与移除（流程与 activateSpecial 一致） */
+    const frozenKeys = new Set();
+    for (const k of clearSet) {
+        const [rr, cc] = parseKey(k);
+        const cell = grid[rr][cc];
+        if (!cell || !cell.el) continue;
+        if (cell.frozen) { frozenKeys.add(k); cell.el.classList.add("ice-break"); }
+        else cell.el.classList.add("clearing");
+    }
+    const adjFrozen = breakAdjacentIce(clearSet);
+    if (adjFrozen.size > 0) soundIceBreak();
+    await sleep(clearMs);
+    onCleared(clearSet, frozenKeys, adjFrozen);
+
+    for (const k of clearSet) {
+        const [rr, cc] = parseKey(k);
+        const cell = grid[rr][cc];
+        if (!cell) continue;
+        if (frozenKeys.has(k)) { breakOneIce(cell); continue; }
+        if (cell.el) cell.el.remove();
+        grid[rr][cc] = null;
+    }
+    applyIceBreak(adjFrozen);
+
+    await dropAndRefill();
     await processMatches();
     await checkBoardState();
     busy = false;
