@@ -2204,5 +2204,26 @@ function hideDevPanel() {
 if (devBtn) devBtn.addEventListener("click", showDevPanel);
 if (devCloseBtn) devCloseBtn.addEventListener("click", hideDevPanel);
 
+/* ===== 开发者按钮彩蛋：连续点击标题6次才显示（刷新后恢复隐藏，仅内存计数） ===== */
+let titleClickCount = 0;
+let titleClickTimer = null;
+const lsTitle = document.querySelector(".ls-title");
+if (lsTitle) {
+    lsTitle.style.userSelect = "none";
+    lsTitle.addEventListener("click", () => {
+        titleClickCount++;
+        clearTimeout(titleClickTimer);
+        titleClickTimer = setTimeout(() => { titleClickCount = 0; }, 1500);
+        if (titleClickCount >= 6) {
+            titleClickCount = 0;
+            if (devBtn) {
+                devBtn.classList.add("visible");
+                hintEl.textContent = "🛠️ 开发者模式已解锁";
+                setTimeout(() => hintEl.textContent = "选择关卡开始游戏", 2000);
+            }
+        }
+    });
+}
+
 /* ===== 启动：先显示关卡选择首页 ===== */
 showLevelSelect();
