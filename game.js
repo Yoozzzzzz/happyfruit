@@ -205,6 +205,10 @@ const hintEl = document.getElementById("hint");
 const levelSelectEl = document.getElementById("level-select");
 const levelGridEl = document.getElementById("level-grid");
 const levelBackBtn = document.getElementById("level-back-btn");
+const devBtn = document.getElementById("dev-btn");
+const devPanel = document.getElementById("dev-panel");
+const devCloseBtn = document.getElementById("dev-close-btn");
+const devSceneGrid = document.getElementById("dev-scene-grid");
 const toolBtns = {
     hammer: document.getElementById("tool-hammer"),
     bomb: document.getElementById("tool-bomb"),
@@ -428,6 +432,7 @@ let jellyGrid = [];         // 果冻层数二维数组 jellyGrid[r][c] = 0~2（
 let jellyCleared = 0;       // 已清除果冻层数
 let ingredientsCollected = 0; // 已收集食材数
 let winStars = 1;           // 过关星级（bonusRound 前计算）
+let devMode = false;        // 开发者模式：关闭过关/失败判定，步数无限
 
 /* ===== 关卡进度（localStorage 持久化） ===== */
 let unlockedLevel = Number(localStorage.getItem("xxl_unlocked") || 1);
@@ -1249,6 +1254,7 @@ function onCleared(clearSet, frozenKeys, adjFrozen) {
 
 /* 目标完成度百分比（用于进度条） */
 function goalProgress() {
+    if (devMode) return 0;
     if (!goal) return Math.min(100, Math.round((score / Math.max(1, target)) * 100));
     if (goal.type === "score") return Math.min(100, Math.round((score / goal.target) * 100));
     if (goal.type === "ice") return Math.min(100, Math.round((iceBroken / goal.target) * 100));
@@ -1353,7 +1359,7 @@ function updateHUD() {
     } else {
         targetEl.textContent = target;
     }
-    movesEl.textContent = movesLeft;
+    movesEl.textContent = devMode ? "∞" : movesLeft;
     progressEl.style.width = goalProgress() + "%";
     updateGoalsBar();
     for (const t2 in toolCountEls) {
@@ -1432,7 +1438,7 @@ function flyBonusOrb(targetR, targetC) {
 
 /* ===== 关卡结束判定（按目标类型判定通关） ===== */
 async function checkLevelEnd() {
-    if (gameOver) return;
+    if (gameOver || devMode) return;
     if (goalAchieved()) {
         gameOver = true;
         winStars = calcStars(); // bonusRound 消耗步数前先算星级
@@ -1985,6 +1991,7 @@ if (levelBackBtn) {
     levelBackBtn.addEventListener("click", () => {
         if (busy) return;
         gameOver = true;
+        devMode = false;
         hideModal();
         showLevelSelect();
     });
@@ -1999,6 +2006,203 @@ modalBtn.addEventListener("click", () => {
         showLevelSelect();
     }
 });
+
+/* ===== 开发者模式：场景测试面板 ===== */
+const DEV_SCENES = [
+    { id: "combo-ss",   icon: "↔️↕️", name: "条纹+条纹", desc: "滑动交换中间两颗触发十字清除" },
+    { id: "combo-sb",   icon: "↔️💥", name: "条纹+炸弹", desc: "滑动交换触发三行三列清除" },
+    { id: "combo-bb",   icon: "💥💥", name: "炸弹+炸弹", desc: "滑动交换触发 5×5 大爆炸" },
+    { id: "combo-rs",   icon: "⭐↔️", name: "彩虹+条纹", desc: "滑动交换，全场同色变条纹并引爆" },
+    { id: "combo-rb",   icon: "⭐💥", name: "彩虹+炸弹", desc: "滑动交换，全场同色变炸弹并引爆" },
+    { id: "combo-rr",   icon: "⭐⭐", name: "彩虹+彩虹", desc: "滑动交换触发全屏清除" },
+    { id: "jelly-full", icon: "🧃",   name: "全场果冻",   desc: "每格1层果冻，消除糖果清果冻" },
+    { id: "jelly-2x",   icon: "🧃🧃", name: "双层果冻",   desc: "中心4×4双层，外圈单层" },
+    { id: "ingredient", icon: "🥥",   name: "食材下落",   desc: "顶部3个食材，护送到底部" },
+    { id: "ice-multi",  icon: "❄️",   name: "多层冰块",   desc: "中心区域2~3层冰" },
+    { id: "wall-maze",  icon: "🧱",   name: "隔断迷宫",   desc: "棋盘内网格状隔断块" },
+    { id: "dead-board", icon: "💀",   name: "死局洗牌",   desc: "无可行步，测试自动洗牌" },
+    { id: "chain",      icon: "🔗",   name: "连锁连击",   desc: "散布特殊糖果，触发连锁" },
+    { id: "special-all",icon: "🎁",   name: "特殊展览",   desc: "四种特殊糖果各放一颗" },
+];
+
+/* 安全棋盘：(r+c)%色数 排列，保证无三连且无可行步（组合技测试用） */
+function genSafeBoard() {
+    holeSet = new Set();
+    grid = [];
+    jellyGrid = [];
+    for (let r = 0; r < ROWS; r++) {
+        grid[r] = [];
+        jellyGrid[r] = [];
+        for (let c = 0; c < COLS; c++) {
+            jellyGrid[r][c] = 0;
+            grid[r][c] = makeCell((r + c) % COLOR_COUNT);
+        }
+    }
+}
+
+/* 随机棋盘：正常随机颜色，避免开局三连（障碍/食材测试用） */
+function genRandomBoard() {
+    holeSet = new Set();
+    grid = [];
+    jellyGrid = [];
+    for (let r = 0; r < ROWS; r++) {
+        grid[r] = [];
+        jellyGrid[r] = [];
+        for (let c = 0; c < COLS; c++) {
+            jellyGrid[r][c] = 0;
+            let color, guard = 0;
+            do {
+                color = randColor();
+                guard++;
+            } while (guard < 30 && (
+                (c >= 2 && grid[r][c - 1].color === color && grid[r][c - 2].color === color) ||
+                (r >= 2 && grid[r - 1][c].color === color && grid[r - 2][c].color === color)
+            ));
+            grid[r][c] = makeCell(color);
+        }
+    }
+}
+
+/* 组合技场景：安全棋盘 + 中间两颗相邻特殊糖果，交换即触发 */
+function applyComboScene(s1, s2) {
+    genSafeBoard();
+    grid[3][3] = makeCell(0, s1);
+    grid[3][4] = makeCell(0, s2);
+}
+
+function applyJellyScene(doubleCenter) {
+    genRandomBoard();
+    for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++)
+            jellyGrid[r][c] = 1;
+    if (doubleCenter) {
+        for (let r = 2; r < 6; r++)
+            for (let c = 2; c < 6; c++)
+                jellyGrid[r][c] = 2;
+    }
+}
+
+function applyIngredientScene() {
+    genRandomBoard();
+    for (const c of [1, 3, 5]) {
+        const cell = grid[0][c];
+        cell.ingredient = true;
+        cell.color = -1;
+        cell.special = null;
+    }
+}
+
+function applyIceScene() {
+    genRandomBoard();
+    for (let r = 2; r < 6; r++)
+        for (let c = 2; c < 6; c++)
+            grid[r][c].frozen = ((r + c) % 2 === 0) ? 3 : 2;
+}
+
+function applyWallScene() {
+    genRandomBoard();
+    for (let r = 1; r < ROWS - 1; r += 2)
+        for (let c = 1; c < COLS - 1; c += 2)
+            grid[r][c] = makeWallCell();
+}
+
+function applyChainScene() {
+    genRandomBoard();
+    const spots = [[1, 1, "striped-h"], [1, 6, "striped-v"], [6, 1, "bomb"], [6, 6, "bomb"], [3, 3, "striped-h"]];
+    for (const [r, c, sp] of spots) {
+        grid[r][c] = makeCell(grid[r][c].color, sp);
+    }
+}
+
+function applySpecialShowcase() {
+    genSafeBoard();
+    grid[2][2] = makeCell(0, "striped-h");
+    grid[2][5] = makeCell(1, "striped-v");
+    grid[5][2] = makeCell(2, "bomb");
+    grid[5][5] = makeCell(3, "rainbow");
+}
+
+function applyDevScene(id) {
+    switch (id) {
+        case "combo-ss":    applyComboScene("striped-h", "striped-v"); break;
+        case "combo-sb":    applyComboScene("striped-h", "bomb"); break;
+        case "combo-bb":    applyComboScene("bomb", "bomb"); break;
+        case "combo-rs":    applyComboScene("rainbow", "striped-h"); break;
+        case "combo-rb":    applyComboScene("rainbow", "bomb"); break;
+        case "combo-rr":    applyComboScene("rainbow", "rainbow"); break;
+        case "jelly-full":  applyJellyScene(false); break;
+        case "jelly-2x":    applyJellyScene(true); break;
+        case "ingredient":  applyIngredientScene(); break;
+        case "ice-multi":   applyIceScene(); break;
+        case "wall-maze":   applyWallScene(); break;
+        case "dead-board":  genSafeBoard(); break;
+        case "chain":       applyChainScene(); break;
+        case "special-all": applySpecialShowcase(); break;
+    }
+}
+
+async function startDevScene(sceneId) {
+    hideDevPanel();
+    devMode = true;
+    levelSelectEl.classList.add("hidden");
+    /* 初始化游戏状态（步数无限，道具充足，无过关目标） */
+    goal = null;
+    target = 0;
+    iceBroken = 0;
+    fruitCleared = {};
+    jellyCleared = 0;
+    jellyGrid = [];
+    ingredientsCollected = 0;
+    movesLeft = 999;
+    tools = { hammer: 9, bomb: 9, shuffle: 9, swap: 9 };
+    score = 0;
+    gameOver = false;
+    busy = false;
+    activeTool = null;
+    selectedKey = null;
+    swapFirst = null;
+    document.querySelectorAll(".bonus-orb").forEach((el) => el.remove());
+    stopHint();
+    lastActionTime = Date.now();
+    const scene = DEV_SCENES.find((s) => s.id === sceneId);
+    hintEl.textContent = "🛠️ " + scene.name + "：" + scene.desc;
+    applyDevScene(sceneId);
+    render();
+    updateHUD();
+    hideModal();
+    /* 死局场景：加载后立即检测并自动洗牌 */
+    if (sceneId === "dead-board") {
+        busy = true;
+        await checkBoardState();
+        busy = false;
+    }
+}
+
+function buildDevPanel() {
+    devSceneGrid.innerHTML = "";
+    for (const s of DEV_SCENES) {
+        const btn = document.createElement("button");
+        btn.className = "dev-scene-btn";
+        btn.innerHTML =
+            '<span class="dev-scene-icon">' + s.icon + "</span>" +
+            '<span class="dev-scene-name">' + s.name + "</span>" +
+            '<span class="dev-scene-desc">' + s.desc + "</span>";
+        btn.addEventListener("click", () => startDevScene(s.id));
+        devSceneGrid.appendChild(btn);
+    }
+}
+
+function showDevPanel() {
+    buildDevPanel();
+    devPanel.classList.remove("hidden");
+}
+
+function hideDevPanel() {
+    devPanel.classList.add("hidden");
+}
+
+if (devBtn) devBtn.addEventListener("click", showDevPanel);
+if (devCloseBtn) devCloseBtn.addEventListener("click", hideDevPanel);
 
 /* ===== 启动：先显示关卡选择首页 ===== */
 showLevelSelect();
